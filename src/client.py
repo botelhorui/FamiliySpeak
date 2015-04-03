@@ -4,7 +4,9 @@ from multiprocessing import Process, Pipe, Manager, Value
 import re
 import traceback
 import socket
-
+import time
+import logging
+import datetime
 
 #my modules
 from my_connection import Client
@@ -13,6 +15,9 @@ import upnp
 import voip
 from server import ClientId
 from head import Statistics
+from logging_setup import logging_setup
+
+logging_setup()
 
 
 
@@ -45,9 +50,12 @@ class MyClient:
 		self.streamer_pipe=None
 		self.player_pipe=None
 
-		
+		self.player_port=None
+
+
 
 		# LAST STATEMENTTTTTTTTTTTTTTT
+
 		self.run()
 
 	def setup_voip(self):
@@ -56,41 +64,46 @@ class MyClient:
 		try:				
 			external_ip = upnp.get_external_ip(self.localip)
 			found_router = True
-			print("[client] got external_ip: ",external_ip)
-		except upnp.NoUpnpDeviceFoundError:
+			logging.debug("[client] got external_ip: "+external_ip)
+		except upnp.MyException:
 			external_ip = local_ip
 			found_router = False
-			print("[client] not behind router")
+			logging.debug("[client] not behind router")
 
 		sock = None
 		port = 0
-		PORT_RANGE_MIN = 42000
-		PORT_RANGE_MAX = 43000
+		PORT_RANGE_MIN = 42001
+		PORT_RANGE_MAX = 42101		
 		for port in range(PORT_RANGE_MIN,PORT_RANGE_MAX):
+			logging.debug("Trying to create player using port {}".format(port))
 			try:
 				#try to obtain the port port
 				sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 				local_address = (local_ip,port)
 				sock.bind(local_address)
 				if found_router:
-					try:
-						upnp.AddPortMapping(port,"UDP",local_ip)
-						break #no exception means we are safe
-					except upnp.SoapActionException:
-						pass
+					try:										
+						upnp.open_port(port,"UDP")
+						logging.debug("Door opened!!!")
+						break #no exception means we are safe						
+					except upnp.MyException as e:
+						logging.debug("Failed opening upnp port {} :".format(port))
+						logging.debug(e)
+					sock.close()
+					sock = None
 				else:
 					break
-
-			except OSError:
+				time.sleep(0.5)
+			except OSError as e:
+				logging.debug("Failed opening socket port")
+				logging.debug(e)				
 				if sock:
-					sock.close()
+					sock.close()			
 
-
-					
-				
-
-		if port == 43000-1:
+		if port == PORT_RANGE_MAX-1:
 			raise RuntimeError('No port available')
+		self.player_port=port
+		logging.debug("created player on local_ip: {} external_ip: {} port: {} in UDP".format(local_ip,external_ip,port))
 
 		self.player_address = (external_ip,port)
 		#create player process
@@ -102,7 +115,7 @@ class MyClient:
 
 		out_sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 		out_sock.bind((local_ip,0))
-
+		logging.debug("created streamer on local_ip: {} external_ip: {} port: {} in UDP".format(local_ip,external_ip,out_sock.getsockname()[1]))
 		#create streamer process
 		self.streamer_pipe,streamer_end=Pipe()
 		p = Process(target=voip.Streamer,name="Streamer-Process",args=(streamer_end,out_sock,self.stats))
@@ -111,7 +124,7 @@ class MyClient:
 
 
 	def handle_rpc(self,c,rpc):
-		print("[client]({})rpc {}".format(c,rpc))
+		logging.debug("[client]({})rpc {}".format(c,rpc))
 		func, *args = rpc
 		func=getattr(self,func)
 		func(*args)
@@ -125,9 +138,7 @@ class MyClient:
 					except EOFError:
 						self.connections.remove(conn)
 					except ConnectionResetError:
-						print(traceback.format_exc())
-						self.close_window()
-						break
+						pass
 					else:
 						if conn is self.gui_pipe:
 							c="GUI"
@@ -164,7 +175,7 @@ class MyClient:
 				self.gui_pipe.send(["connecting_failed"])
 		except Exception as e:
 			#todo send error to gui
-			print(traceback.format_exc())
+			logging.debug(traceback.format_exc())
 			action = ["connecting_failed"]
 			self.gui_pipe.send(action)		
 		
@@ -197,7 +208,7 @@ class MyClient:
 		self.keep_looping = False
 		if self.closed:
 			return
-		print("[client] closing")
+		logging.debug("[client] closing")
 		self.closed=True
 		action = ["stop"]
 		try:
@@ -215,9 +226,7 @@ class MyClient:
 			p.join() #TODO BLOCKS:..
 		for c in self.connections:
 			c.close()
-		print("[client] finished closing")
-
-
+		logging.debug("[client] finished closing")
 		# clear streamer and player processes
 
 

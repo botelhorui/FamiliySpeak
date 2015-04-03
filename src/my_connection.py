@@ -79,13 +79,16 @@ class Listener:
 			and authkey is a bytes object"""
 		self.sock = socket.socket()
 		self.sock.bind(address)
-		self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		#self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		self.sock.listen(5)
+		self.sock.settimeout(0.5)
 		self.authkey = authkey
+		self.address = address
 
-	def accept(self):
+	def accept(self):			
 		sock,addr = self.sock.accept()
-		sock.settimeout(1)
+		print("[listener] connection attempt from ", addr)
+		sock.settimeout(2)
 		conn = Connection(sock)
 		try:
 			deliver_challenge(conn,self.authkey)
@@ -93,7 +96,13 @@ class Listener:
 			conn.sock.settimeout(None)
 			return conn
 		except socket.timeout:
-			raise AuthenticationTimeout()
+			conn.close()
+			raise AuthenticationTimeout()			
+		except AuthenticationError as e:
+			conn.close()
+			raise e
+			
+
 
 	def close(self):
 		self.sock.close()
@@ -149,7 +158,10 @@ def answer_challenge(conn, authkey):
     digest = hmac.new(authkey, message, 'md5').digest()
     conn.send_bytes(digest)
     response = conn.recv_bytes(256)        # reject large message
-    if response != WELCOME:
+    if response[:len(FAILURE)] == FAILURE:    	
     	raise AuthenticationError()
+    elif response != WELCOME:
+    	raise AuthenticationError()
+
 
 

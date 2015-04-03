@@ -7,8 +7,8 @@ from multiprocessing import *
 from multiprocessing.connection import wait
 import array
 import audioop
-
 import bisect
+import logging
 ## mine
 from server import ClientId
 from head import Statistics
@@ -76,7 +76,7 @@ class Streamer:
 		rpc = self.client_pipe.recv()
 		func, *args = rpc
 		func=getattr(self,func)
-		print("[streamer] rpc {}".format(rpc))
+		logging.debug("[streamer] rpc {}".format(rpc))
 		func(*args)
 
 	def set_client_id(self,client_id):
@@ -97,13 +97,17 @@ class Streamer:
 		except KeyboardInterrupt:
 			pass
 		finally:
-			print("[streamer] cleaning")
+			logging.debug("[streamer] cleaning")
 			self.sock.close()
 			self.stream.stop_stream()
-			print("[streamer] exit")
+			logging.debug("[streamer] exit")
 
 	def stream_loop(self):
-		data = self.stream.read(CHUNK)
+		try:
+			data = self.stream.read(CHUNK)
+		except IOError:
+			logging.debug("[streamer] IOError when reading from microphone")
+			return
 
 		with self.stats.produced.get_lock():
 			self.stats.produced.value+=len(data)
@@ -137,10 +141,11 @@ class Player:
 		self.deadline = mytime() + CHUNK_DURATION
 
 		# setup dedicated process to play samples and block while playing...
-		samples_in, self.samples_pipe = Pipe()
+		self.samples_pipe, samples_in = Pipe()
 		self._player = Process(target=stream_play_loop,args=(samples_in,self.stats))
-		
 		self._player.start()
+
+		self.debug=""
 		# final statement
 		self.run()
 
@@ -150,7 +155,7 @@ class Player:
 		rpc = self.client_pipe.recv()
 		func, *args = rpc
 		func=getattr(self,func)
-		print("[player] rpc {}".format(rpc))
+		logging.debug("[player] rpc {}".format(rpc))
 		func(*args)
 
 	def set_clients(self,clients_ids):
@@ -164,6 +169,8 @@ class Player:
 		for k in keys:
 			del self.streams[k]
 
+		logging.debug("[player] clients:{}".format(self.streams))
+
 	def stop(self):
 		self.keep_looping=False
 
@@ -176,16 +183,16 @@ class Player:
 		except KeyboardInterrupt:
 			pass
 		finally:
-			print("[player] cleaning")			
+			logging.debug("[player] cleaning")			
 			self.samples_pipe.send([])
 			self._player.join()
 			self.sock.close()
-			print("[player] exit")
+			logging.debug("[player] exit")
 
 
 	def play_loop(self):
-		
-		if not self.streams: # should we discard packets?			
+		if not self.streams: # should we discard packets?
+			#logging.debug("[player] no streamers")
 			self.clear_socket()			
 			return
 
@@ -194,14 +201,18 @@ class Player:
 		#Receive frames while, previous one is playing
 		total_received = 0
 		while True:
-			if mytime() > self.deadline:
-				self.deadline += CHUNK_DURATION
+			now = mytime()
+			if now > self.deadline:
+				#logging.debug("[player] deadline")
+				while not self.deadline > now:
+					self.deadline += CHUNK_DURATION
 				break
 
 			total_rejected+=l				
-			try:
+			try:							
 				payload, addr = self.sock.recvfrom(2048)
 				l = len(payload)
+				#logging.debug("[player] received {} bytes".format(l))
 			except socket.timeout:
 				continue
 			except BlockingIOError:
@@ -209,6 +220,7 @@ class Player:
 
 			try:
 				sample = pickle.loads(payload)
+				#TODO check if its a valid object
 			except pickle.UnpicklingError:
 				continue
 
@@ -307,12 +319,16 @@ class Stream:
 
 
 if __name__=="__main__":
-	print("VOIP TEST:")
+	"""
+	This main is deprecated
+	"""
+
+	logging.debug("VOIP TEST:")
 	# PRINT CONSTANTS
 	d = locals().copy()
 	for k,v in d.items():
 		if not k.startswith("_") and k.isupper():
-			print("{} = {}".format(k,v))
+			logging.debug("{} = {}".format(k,v))
 	choice = input("streamer(s) or player(p) or benchmark(b)?")	
 	if choice == "s":
 		sci = ClientId(0,"test_streamer",None)
@@ -322,7 +338,7 @@ if __name__=="__main__":
 		paddr = (ip,int(port))
 		pci = ClientId(1,"test_player",paddr)
 		left.send(["set_clients",[pci]])
-		print("Streaming mic to {} ...".format(paddr))		
+		logging.debug("Streaming mic to {} ...".format(paddr))		
 		Streamer(right,None)
 	elif choice == "p" or choice == "b":
 		import socket		
@@ -338,5 +354,5 @@ if __name__=="__main__":
 		left,right = Pipe()
 		sci = ClientId(0,"test_streamer",None)
 		left.send(["set_clients",[sci]])
-		print("Playing from {} ...".format(paddr))
+		logging.debug("Playing from {} ...".format(paddr))
 		Player(right,sock,None)

@@ -13,8 +13,8 @@ mytime()
 POLL_TIMEOUT = 50
 
 WINDOW_TITLE = "FamilySpeak"
-DEFAULT_SERVER = "127.0.0.1:42000"
-DEFAULT_NICK = ""
+DEFAULT_SERVER = "46.189.129.246:15000"
+DEFAULT_NICK = "test user"
 
 STATS_UPDATE_RATE = 1
 
@@ -84,6 +84,7 @@ class MyAppWindow():
     def show_message(self,message):
         self.chat["state"]="normal"     
         self.chat.insert("end",message+"\n")
+        self.chat.yview("end")
         self.chat["state"]="disabled"
 
     def handle_rpc(self):
@@ -99,7 +100,7 @@ class MyAppWindow():
         pass
 
     def setup_connecting_frame(self):
-        self.connecting_frame=ttk.Frame(self.root)
+        self.connecting_frame=ttk.Frame(self.root,padding="60")
         self.connecting_frame.grid(column=0,row=0,sticky=(N,W,E,S))
         self.connecting_string = StringVar()
         ttk.Label(self.connecting_frame,textvariable=self.connecting_string).grid(column=0,row=0)       
@@ -113,7 +114,7 @@ class MyAppWindow():
         self.chat_frame.rowconfigure(1,weight=1)
         self.chat_frame.rowconfigure(3,weight=1)    
         self.chat_frame.grid_remove()   
-        ttk.Label(self.chat_frame,text="talibans online:").grid(column=0,row=0,sticky=(W,E))
+        ttk.Label(self.chat_frame,text="Family members online:").grid(column=0,row=0,sticky=(W,E))
         #client list
         self.users = Text(self.chat_frame, width=20,height=5)
         self.users.grid(column=0,row=1,sticky=(N,W,E,S),columnspan=2)
@@ -186,6 +187,7 @@ class MyAppWindow():
         self.server = StringVar()
         self.nickname = StringVar()
         self.server.set(DEFAULT_SERVER)
+        self.nickname.set(DEFAULT_NICK)
         width = len("xxx.xxx.xxx.xxx:xxxxx")
         ttk.Label(self.login_frame,text="Server").grid(column=0,row=0,sticky=E)
         ttk.Entry(self.login_frame,textvariable=self.server).grid(column=1,row=0,sticky=(W,E))
@@ -197,8 +199,13 @@ class MyAppWindow():
 
         #setup the network adapters ips
         ttk.Label(self.login_frame,text="Network Adapter").grid(column=0,row=3,sticky=E)
-        from socket import gethostname, gethostbyname_ex
-        ips = gethostbyname_ex(gethostname())[2]       
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
+        s.connect(("123.123.123.123",80))
+        public_ip = s.getsockname()[0]
+        ips = socket.gethostbyname_ex(socket.gethostname())[2]
+        i = ips.index(public_ip)
+        ips[0],ips[i]=ips[i],ips[0]     
         self.addr = StringVar()
         self.addr.set(ips[0])
         for i in range(len(ips)):
@@ -245,8 +252,14 @@ class MyAppWindow():
 if __name__ == "__main__":
     from multiprocessing import *
     gui_end, gui_conn = Pipe()
-    v = Value("i",0)
-    p = Process(target=MyAppWindow,args=(gui_conn,v,v))
+    stats = Statistics(
+            sent=Value("i",0),
+            received=Value("i",0),
+            produced=Value("i",0),
+            played=Value("i",0),
+            rejected=Value("i",0)
+    )
+    p = Process(target=MyAppWindow,args=(gui_conn,stats))
     p.start()
     while True:
         if gui_end.poll():
